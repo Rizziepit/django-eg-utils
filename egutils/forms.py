@@ -7,29 +7,33 @@ from collections import OrderedDict
 import six
 
 from django import forms
-from django.forms.utils import ErrorList
+from django.forms.util import ErrorList
 from django.core.exceptions import (
-    ImproperlyConfigured, FieldError, NON_FIELD_ERRORS)
-from django.forms.forms import BaseForm, DeclarativeFieldsMetaclass
+    ImproperlyConfigured, FieldError)
+from django.forms.forms import BaseForm, get_declared_fields
 from django.forms.models import ModelFormOptions, ALL_FIELDS
+from django.forms.widgets import media_property
 
 from elasticgit import models as eg_models
 
 
 FIELD_MAPPING = {
+    eg_models.UUIDField: forms.CharField,
     eg_models.TextField: forms.CharField,
     eg_models.UnicodeTextField: forms.CharField,
-    eg_models.IntegerTextField: forms.IntegerField,
+    eg_models.IntegerField: forms.IntegerField,
     eg_models.FloatField: forms.FloatField,
     eg_models.BooleanField: forms.BooleanField,
-    eg_models.ListField: forms.CharField,
-    eg_models.DictField: forms.CharField,
+    eg_models.ListField: forms.CharField,  # TODO: this won't validate
+    eg_models.DictField: forms.CharField,  # TODO: this won't validate
     eg_models.URLField: forms.URLField
 }
+# TODO: auto-update DateTimeField (but EG uses a TextField for those)
+EXCLUDED_FIELDS = ('_version', 'uuid', 'id')
 
 
 def fields_for_model(model, fields, exclude, widgets, localized_fields, labels,
-                     help_texts, error_messages, field_classes):
+                     help_texts, error_messages):
     """
     Returns a ``OrderedDict`` containing form fields for the given model.
 
@@ -50,12 +54,11 @@ def fields_for_model(model, fields, exclude, widgets, localized_fields, labels,
 
     ``error_messages`` is a dictionary of model field names mapped to a
     dictionary of error messages.
-
-    ``field_classes`` is a dictionary of model field names mapped to a form
-    field class.
     """
     field_list = []
     for f in model._get_fields():
+        if f.name in EXCLUDED_FIELDS:
+            continue
         if fields is not None and f.name not in fields:
             continue
         if exclude and f.name in exclude:
@@ -70,14 +73,13 @@ def fields_for_model(model, fields, exclude, widgets, localized_fields, labels,
             kwargs['label'] = labels[f.name]
         if help_texts and f.name in help_texts:
             kwargs['help_text'] = help_texts[f.name]
+        elif f.doc:
+            kwargs['help_text'] = f.doc
         if error_messages and f.name in error_messages:
             kwargs['error_messages'] = error_messages[f.name]
+        kwargs['required'] = f.required
 
-        if field_classes and f.name in field_classes:
-            form_class = field_classes[f.name]
-        else:
-            form_class = FIELD_MAPPING[type(f)]
-
+        form_class = FIELD_MAPPING[type(f)]
         formfield = form_class(**kwargs)
         field_list.append((f.name, formfield))
     field_dict = OrderedDict(field_list)
@@ -90,7 +92,7 @@ def fields_for_model(model, fields, exclude, widgets, localized_fields, labels,
     return field_dict
 
 
-def model_to_dict(model):
+def model_to_dict(model, fields, exclude):
     """
     Returns a dict containing the data in ``instance`` suitable for passing as
     a Form's ``initial`` keyword argument.
@@ -102,8 +104,15 @@ def model_to_dict(model):
     fields will be excluded from the returned dict, even if they are listed in
     the ``fields`` argument.
     """
-    data = dict(model)
-    data.pop('_version', '')
+    data = {}
+    for f in model._get_fields():
+        if f.name in EXCLUDED_FIELDS:
+            continue
+        if fields is not None and f.name not in fields:
+            continue
+        if exclude and f.name in exclude:
+            continue
+        data[f.name] = getattr(model, f.name)
     return data
 
 
@@ -115,7 +124,7 @@ def construct_instance(form, instance, fields=None, exclude=None):
     cleaned_data = form.cleaned_data
     data = {}
     for f in instance._get_fields():
-        if f.name == '_version':
+        if f.name in EXCLUDED_FIELDS:
             continue
         if fields is not None and f.name not in fields:
             continue
@@ -126,13 +135,16 @@ def construct_instance(form, instance, fields=None, exclude=None):
     return instance.update(data)
 
 
-class ModelFormMetaclass(DeclarativeFieldsMetaclass):
+class ModelFormMetaclass(type):
     def __new__(mcs, name, bases, attrs):
+        declared_fields = get_declared_fields(bases, attrs, False)
         new_class = super(ModelFormMetaclass, mcs).__new__(mcs, name, bases, attrs)
 
         if bases == (BaseEGModelForm,):
             return new_class
 
+        if 'media' not in attrs:
+            new_class.media = media_property(new_class)
         opts = new_class._meta = ModelFormOptions(getattr(new_class, 'Meta', None))
 
         if opts.model:
@@ -152,12 +164,12 @@ class ModelFormMetaclass(DeclarativeFieldsMetaclass):
             fields = fields_for_model(opts.model, opts.fields, opts.exclude,
                                       opts.widgets, opts.localized_fields,
                                       opts.labels, opts.help_texts,
-                                      opts.error_messages, opts.field_classes)
+                                      opts.error_messages)
 
             # make sure opts.fields doesn't specify an invalid field
             none_model_fields = [k for k, v in six.iteritems(fields) if not v]
             missing_fields = (set(none_model_fields) -
-                              set(new_class.declared_fields.keys()))
+                              set(declared_fields.keys()))
             if missing_fields:
                 message = 'Unknown field(s) (%s) specified for %s'
                 message = message % (', '.join(missing_fields),
@@ -165,12 +177,12 @@ class ModelFormMetaclass(DeclarativeFieldsMetaclass):
                 raise FieldError(message)
             # Override default model fields with any custom declared ones
             # (plus, include all the other declared fields).
-            fields.update(new_class.declared_fields)
+            fields.update(declared_fields)
         else:
-            fields = new_class.declared_fields
+            fields = declared_fields
 
         new_class.base_fields = fields
-
+        new_class.declared_fields = declared_fields
         return new_class
 
 
@@ -255,7 +267,7 @@ class BaseEGModelForm(BaseForm):
             raise ValueError(
                 "The %s could not be %s because the data didn't validate." % (
                     self.instance.__class__.__name__,
-                    'created' if self.instance.uuid else 'updated',
+                    'updated' if self.instance.uuid else 'created',
                 )
             )
         if commit:
@@ -264,7 +276,7 @@ class BaseEGModelForm(BaseForm):
                 raise ValueError('Workspace was not provided.')
             message = message or '%s %s' % (
                 self.instance.__class__.__name__,
-                'created' if self.instance.uuid else 'updated')
+                'updated' if self.instance.uuid else 'created')
             workspace.save(self.instance, message, author, committer)
 
         return self.instance
