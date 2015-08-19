@@ -14,15 +14,24 @@ TODO list for a complete solution:
 * a subclass of ModelChoiceField that allows selection of either
     Django or elastic-git model instances, and serializes these
     to a UUID hex string.
-* a subclass of ModelMultipleChoiceField that allows selection of either
-    Django or elastic-git model instances, and serializes these
-    to a UUID hex string.
+* a subclass of ModelMultipleChoiceField that implements a ListField interface.
+    It allows selection of either Django or elastic-git model instances, and
+    serializes these to a list of UUID hex strings.
 * detect TextField fields that contain datetime strings and use a DateTimeInput
     widget for these instead (elastic-git has no DateTimeField equivalent).
 * detect datetime fields with names like "modified", "last_updated", etc. which
     must be auto-updated to the current time on form save.
-* add a form factory function so that forms can be created on the fly by views.
+* add a form factory function so that forms can be created on the fly by views,
+    based on Django's modelform_factory:
+    https://docs.djangoproject.com/en/1.6/ref/forms/models/#django.forms.models.modelform_factory
 
+CHALLENGES:
+
+elastic-git fields don't have the attribute `choices`. So it isn't possible
+to generate selection options automatically based on a model. These choices
+have to be specified somewhere, e.g. an EGModelForm subclass or in the factory
+function arguments. We need a way of configuring form options without
+writing code. This also applies to a number of other form customizations.
 '''
 from collections import OrderedDict
 
