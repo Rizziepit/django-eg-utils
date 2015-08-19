@@ -1,6 +1,28 @@
 '''
-Adapted from Django ModelForm code to a large extent:
-https://github.com/django/django/blob/8656cfc4e01332426e5e4b78c20a4e9ec443b293/django/forms/models.py
+This module contains the base class for elastic-git model forms, EGModelForm.
+It works the same as ModelForm and provides the same Meta options. However, it
+only works for models with simple fields at the moment, i.e. not
+`elasticgit.models.ListField` and `elasticgit.models.DictField`.
+
+Adapted from Django ModelForm code:
+https://github.com/django/django/blob/1.6.10/django/forms/models.py
+
+TODO list for a complete solution:
+
+* matching form fields for `elasticgit.models.ListField` and
+    `elasticgit.models.DictField`.
+* a subclass of ModelChoiceField that allows selection of either
+    Django or elastic-git model instances, and serializes these
+    to a UUID hex string.
+* a subclass of ModelMultipleChoiceField that allows selection of either
+    Django or elastic-git model instances, and serializes these
+    to a UUID hex string.
+* detect TextField fields that contain datetime strings and use a DateTimeInput
+    widget for these instead (elastic-git has no DateTimeField equivalent).
+* detect datetime fields with names like "modified", "last_updated", etc. which
+    must be auto-updated to the current time on form save.
+* add a form factory function so that forms can be created on the fly by views.
+
 '''
 from collections import OrderedDict
 
